@@ -29,6 +29,7 @@
 #include <wlr/util/box.h>
 
 #include "scenefx/types/fx/blur_data.h"
+#include "scenefx/types/fx/glass_data.h"
 #include "scenefx/types/fx/clipped_region.h"
 #include "scenefx/types/linked_node.h"
 
@@ -126,7 +127,14 @@ struct wlr_scene {
 		bool highlight_transparent_region;
 
 		struct blur_data blur_data;
+		struct glass_data glass_data;
 	} WLR_PRIVATE;
+
+	/**
+	 * Optional limit on the outputs a buffer is reported on. The caller must
+	 * clip the buffer to that output. Return NULL for normal overlap tracking.
+	 */
+	struct wlr_output *(*buffer_output_limit)(struct wlr_scene_buffer *buffer);
 };
 
 /** A scene-graph node displaying a single surface. */
@@ -180,6 +188,11 @@ struct wlr_scene_blur {
 	float alpha;
 
 	bool should_only_blur_bottom_layer;
+	bool glass;
+	// A lens set into the glass and the box it is cut off outside of, in
+	// node-local coordinates; empty boxes for none
+	struct wlr_box glass_lens, glass_lens_clip;
+	int glass_lens_radius;
 
 	struct linked_node transparency_mask_source;
 };
@@ -417,6 +430,9 @@ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
 
 // Sets the global blur num_passes parameter
 void wlr_scene_set_blur_num_passes(struct wlr_scene *scene, int num_passes);
+
+// Sets how liquid glass looks (see wlr_scene_blur_set_glass)
+void wlr_scene_set_glass_data(struct wlr_scene *scene, const struct glass_data *glass);
 
 // Sets the global blur radius parameter
 void wlr_scene_set_blur_radius(struct wlr_scene *scene, int radius);
@@ -669,6 +685,23 @@ void wlr_scene_blur_set_alpha(struct wlr_scene_blur *blur, float alpha);
  * fade-out effect.
  */
 void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength);
+
+/**
+ * Turns the blur node into liquid glass: its size and corner radius shape a
+ * slab of glass that refracts the blurred backdrop through its rim, styled by
+ * the scene's glass data. The transparency mask source is ignored meanwhile.
+ */
+void wlr_scene_blur_set_glass(struct wlr_scene_blur *blur, bool glass);
+
+/**
+ * Sets a lens into the node's glass: a rounded box, in node-local
+ * coordinates, of a second glass with its own tint and a narrow rim that
+ * refracts where the two glasses meet (see struct glass_data). Outside `clip`,
+ * when not empty, the lens is cut off. An empty or null box removes the lens;
+ * without glass, the lens shows nothing.
+ */
+void wlr_scene_blur_set_glass_lens(struct wlr_scene_blur *blur, const struct wlr_box *box,
+	int radius, const struct wlr_box *clip);
 
 /**
  * Sets the region where to clip the blur.

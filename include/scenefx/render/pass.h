@@ -8,6 +8,7 @@
 
 #include "render/egl.h"
 #include "types/fx/clipped_region.h"
+#include "scenefx/types/fx/glass_data.h"
 
 struct fx_gles_render_pass {
 	struct wlr_render_pass base;
@@ -82,6 +83,15 @@ struct fx_render_box_shadow_options {
 	struct wlr_render_color color;
 };
 
+struct fx_render_glass_options {
+	const struct glass_data *data;
+	float scale; // framebuffer pixels per logical pixel
+	float light[2]; // unit vector towards the light, framebuffer space
+	struct wlr_box lens; // a lens set into the glass, framebuffer space; empty for none
+	float lens_radius; // framebuffer pixels
+	struct wlr_box lens_clip; // where the lens is cut off, framebuffer space; empty for none
+};
+
 struct fx_render_blur_pass_options {
 	struct fx_render_texture_options tex_options;
 	struct fx_framebuffer *current_buffer;
@@ -91,6 +101,9 @@ struct fx_render_blur_pass_options {
 	float blur_strength;
 	struct fx_corner_fradii corners;
 	struct clipped_fregion clipped_region;
+	/* Draws liquid glass in tex_options.clip_box instead of plain blur. Leave
+	 * NULL to disable */
+	const struct fx_render_glass_options *glass;
 };
 
 struct fx_gles_render_pass *fx_get_render_pass(struct wlr_render_pass *render_pass);

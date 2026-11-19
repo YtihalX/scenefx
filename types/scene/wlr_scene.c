@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <math.h>
 #include <pixman.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -233,6 +234,7 @@ struct wlr_scene *wlr_scene_create(void) {
 	scene->highlight_transparent_region = env_parse_bool("WLR_SCENE_HIGHLIGHT_TRANSPARENT_REGION");
 
 	scene->blur_data = blur_data_get_default();
+	scene->glass_data = glass_data_get_default();
 
 	return scene;
 }
@@ -398,6 +400,10 @@ struct scene_update_data {
 	struct wl_list *outputs;
 	bool calculate_visibility;
 	bool restack_xwayland_surfaces;
+	const struct wlr_scene *scene;
+	// Where glass now shows more or less, as far as it reaches; collected
+	// unless null (see glass_keep_scene_visible)
+	pixman_region32_t *glass_changes;
 
 #if WLR_HAS_XWAYLAND
 	struct wlr_xwayland_surface *restack_above;
@@ -468,6 +474,25 @@ static void transform_output_box(struct wlr_box *box, const struct render_data *
 	wlr_box_transform(box, box, transform, data->trans_width, data->trans_height);
 }
 
+// The unit vector towards a light shining from `angle` degrees clockwise from
+// the top of the output, in the output's framebuffer space.
+static void glass_light_direction(float angle, enum wl_output_transform transform,
+		float light[static 2]) {
+	float radians = angle * 3.14159265f / 180.0f;
+	float x = sinf(radians), y = -cosf(radians);
+	// The point mapping of wlr_box_transform, applied to a direction
+	switch (wlr_output_transform_invert(transform)) {
+	case WL_OUTPUT_TRANSFORM_NORMAL: light[0] = x; light[1] = y; break;
+	case WL_OUTPUT_TRANSFORM_90: light[0] = -y; light[1] = x; break;
+	case WL_OUTPUT_TRANSFORM_180: light[0] = -x; light[1] = -y; break;
+	case WL_OUTPUT_TRANSFORM_270: light[0] = y; light[1] = -x; break;
+	case WL_OUTPUT_TRANSFORM_FLIPPED: light[0] = -x; light[1] = y; break;
+	case WL_OUTPUT_TRANSFORM_FLIPPED_90: light[0] = y; light[1] = x; break;
+	case WL_OUTPUT_TRANSFORM_FLIPPED_180: light[0] = x; light[1] = -y; break;
+	case WL_OUTPUT_TRANSFORM_FLIPPED_270: light[0] = -y; light[1] = -x; break;
+	}
+}
+
 static void scene_output_damage(struct wlr_scene_output *scene_output,
 		const pixman_region32_t *damage) {
 	struct wlr_output *output = scene_output->output;
@@ -532,6 +557,9 @@ static void update_node_update_outputs(struct wlr_scene_node *node,
 	uint64_t active_outputs = 0;
 
 	if (!pixman_region32_empty(&node->visible)) {
+		struct wlr_scene *scene = wl_container_of(outputs, scene, outputs);
+		struct wlr_output *limit = scene->buffer_output_limit
+			? scene->buffer_output_limit(scene_buffer) : NULL;
 		uint32_t visible_area = region_area(&node->visible);
 
 		// let's update the outputs in two steps:
@@ -542,7 +570,7 @@ static void update_node_update_outputs(struct wlr_scene_node *node,
 		// the middle of a calculation.
 		struct wlr_scene_output *scene_output;
 		wl_list_for_each(scene_output, outputs, link) {
-			if (scene_output == ignore) {
+			if (scene_output == ignore || (limit && scene_output->output != limit)) {
 				continue;
 			}
 
@@ -673,6 +701,59 @@ static void restack_xwayland_surface(struct wlr_scene_node *node,
 }
 #endif
 
+// Whether a node is glass that refracts the nodes below it, rather than the
+// bottom layers that optimized blur saves.
+static bool glass_sees_scene(struct wlr_scene_node *node) {
+	if (node->type != WLR_SCENE_NODE_BLUR) {
+		return false;
+	}
+	struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
+	return blur->glass && !blur->should_only_blur_bottom_layer;
+}
+
+// How far from a pixel it shows glass sees the nodes below it, in layout
+// pixels: as far as its rim refracts, then as far as the blur spreads. The
+// blur spreads in buffer pixels, no larger on outputs scaled 1 and up.
+static int scene_glass_reach(const struct wlr_scene *scene) {
+	struct blur_data blur_data = scene->blur_data;
+	return (int)ceilf(glass_data_reach(&scene->glass_data)) + blur_data_calc_size(&blur_data) + 1;
+}
+
+// Glass shows the nodes below it from within scene_glass_reach of each pixel
+// it shows, also those under the opaque parts of the surface it carries (an
+// icon, a cover): unrendered, they would show last frame through the glass.
+// Keeps the nodes below visible there, and only there: under glass that shows
+// nothing, as under a fullscreen window, nothing needs rendering or frames.
+static void glass_keep_scene_visible(struct wlr_scene_node *node, const struct wlr_box *box,
+		const pixman_region32_t *shown_before, struct scene_update_data *data) {
+	int reach = scene_glass_reach(data->scene);
+	pixman_region32_t seen;
+	pixman_region32_init(&seen);
+	pixman_region32_copy(&seen, &node->visible);
+	wlr_region_expand(&seen, &seen, reach);
+	pixman_region32_intersect_rect(&seen, &seen, box->x, box->y, box->width, box->height);
+	pixman_region32_intersect(&seen, &seen, data->update_region);
+	pixman_region32_union(data->visible, data->visible, &seen);
+	pixman_region32_fini(&seen);
+
+	if (data->glass_changes == NULL) {
+		return;
+	}
+	// The glass shows more or less only within the update region, but what it
+	// needs of the nodes below changes as far as it reaches from there
+	pixman_region32_t changed, lost;
+	pixman_region32_init(&changed);
+	pixman_region32_init(&lost);
+	pixman_region32_subtract(&changed, &node->visible, shown_before);
+	pixman_region32_subtract(&lost, shown_before, &node->visible);
+	pixman_region32_union(&changed, &changed, &lost);
+	wlr_region_expand(&changed, &changed, reach);
+	pixman_region32_intersect_rect(&changed, &changed, box->x, box->y, box->width, box->height);
+	pixman_region32_union(data->glass_changes, data->glass_changes, &changed);
+	pixman_region32_fini(&lost);
+	pixman_region32_fini(&changed);
+}
+
 static bool scene_node_update_iterator(struct wlr_scene_node *node,
 		int lx, int ly, void *_data) {
 	struct scene_update_data *data = _data;
@@ -691,6 +772,15 @@ static bool scene_node_update_iterator(struct wlr_scene_node *node,
 	struct wlr_box box = { .x = lx, .y = ly };
 	scene_node_get_size(node, &box.width, &box.height);
 
+	bool glass = data->calculate_visibility && glass_sees_scene(node);
+	pixman_region32_t shown_before;
+	if (glass) {
+		pixman_region32_init(&shown_before);
+		if (data->glass_changes != NULL) {
+			pixman_region32_copy(&shown_before, &node->visible);
+		}
+	}
+
 	pixman_region32_subtract(&node->visible, &node->visible, data->update_region);
 	pixman_region32_union(&node->visible, &node->visible, data->visible);
 	pixman_region32_intersect_rect(&node->visible, &node->visible,
@@ -702,6 +792,11 @@ static bool scene_node_update_iterator(struct wlr_scene_node *node,
 		scene_node_opaque_region(node, lx, ly, &opaque);
 		pixman_region32_subtract(data->visible, data->visible, &opaque);
 		pixman_region32_fini(&opaque);
+	}
+
+	if (glass) {
+		glass_keep_scene_visible(node, &box, &shown_before, data);
+		pixman_region32_fini(&shown_before);
 	}
 
 	update_node_update_outputs(node, data->outputs, NULL, NULL);
@@ -752,8 +847,9 @@ static void scene_node_bounds(struct wlr_scene_node *node,
 	pixman_region32_union_rect(visible, visible, x, y, width, height);
 }
 
-static void scene_update_region(struct wlr_scene *scene,
-		const pixman_region32_t *update_region) {
+static void scene_update_visibility(struct wlr_scene *scene,
+		const pixman_region32_t *update_region, bool restack_xwayland_surfaces,
+		pixman_region32_t *glass_changes) {
 	pixman_region32_t visible;
 	pixman_region32_init(&visible);
 	pixman_region32_copy(&visible, update_region);
@@ -770,13 +866,32 @@ static void scene_update_region(struct wlr_scene *scene,
 		},
 		.outputs = &scene->outputs,
 		.calculate_visibility = scene->calculate_visibility,
-		.restack_xwayland_surfaces = scene->restack_xwayland_surfaces,
+		.restack_xwayland_surfaces = restack_xwayland_surfaces,
+		.scene = scene,
+		.glass_changes = glass_changes,
 	};
 
 	// update node visibility and output enter/leave events
 	scene_nodes_in_box(&scene->tree.node, &data.update_box, scene_node_update_iterator, &data);
 
 	pixman_region32_fini(&visible);
+}
+
+static void scene_update_region(struct wlr_scene *scene,
+		const pixman_region32_t *update_region) {
+	pixman_region32_t glass_changes;
+	pixman_region32_init(&glass_changes);
+	scene_update_visibility(scene, update_region, scene->restack_xwayland_surfaces,
+		&glass_changes);
+
+	// Glass that now shows more or less needs more or less of the nodes below
+	// it, beyond the update region too. Nothing moved there, so the X11
+	// stacking stays.
+	pixman_region32_subtract(&glass_changes, &glass_changes, update_region);
+	if (!pixman_region32_empty(&glass_changes)) {
+		scene_update_visibility(scene, &glass_changes, false, NULL);
+	}
+	pixman_region32_fini(&glass_changes);
 }
 
 static void scene_node_cleanup_when_disabled(struct wlr_scene_node *node,
@@ -1188,6 +1303,37 @@ void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength) {
 	scene_node_update(&blur->node, NULL);
 }
 
+void wlr_scene_blur_set_glass(struct wlr_scene_blur *blur, bool glass) {
+	if (blur->glass == glass) {
+		return;
+	}
+
+	blur->glass = glass;
+	scene_node_update(&blur->node, NULL);
+}
+
+void wlr_scene_blur_set_glass_lens(struct wlr_scene_blur *blur, const struct wlr_box *box,
+		int radius, const struct wlr_box *clip) {
+	struct wlr_box lens = {0}, lens_clip = {0};
+	if (box != NULL && !wlr_box_empty(box)) {
+		lens = *box;
+		if (clip != NULL && !wlr_box_empty(clip)) {
+			lens_clip = *clip;
+		}
+	} else {
+		radius = 0;
+	}
+	if (wlr_box_equal(&blur->glass_lens, &lens) && blur->glass_lens_radius == radius &&
+			wlr_box_equal(&blur->glass_lens_clip, &lens_clip)) {
+		return;
+	}
+
+	blur->glass_lens = lens;
+	blur->glass_lens_radius = radius;
+	blur->glass_lens_clip = lens_clip;
+	scene_node_update(&blur->node, NULL);
+}
+
 void wlr_scene_blur_set_clipped_region(struct wlr_scene_blur *blur,
 		struct clipped_region clipped_region) {
 	if (fx_corner_radii_eq(blur->clipped_region.corners, clipped_region.corners) &&
@@ -1219,6 +1365,15 @@ void wlr_scene_set_blur_data(struct wlr_scene *scene, int num_passes,
 	buff_data->saturation = saturation;
 
 	mark_all_optimized_blur_nodes_dirty(&scene->tree.node);
+	scene_node_update(&scene->tree.node, NULL);
+}
+
+void wlr_scene_set_glass_data(struct wlr_scene *scene, const struct glass_data *glass) {
+	if (memcmp(&scene->glass_data, glass, sizeof(*glass)) == 0) {
+		return;
+	}
+
+	scene->glass_data = *glass;
 	scene_node_update(&scene->tree.node, NULL);
 }
 
@@ -2194,7 +2349,9 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 		struct wlr_scene_blur *blur = wlr_scene_blur_from_node(node);
 
 		struct wlr_texture *tex = NULL;
-		struct wlr_scene_buffer *mask = wlr_scene_blur_get_transparency_mask_source(blur);
+		// Glass takes its shape from the node's rounded box, not from a mask
+		struct wlr_scene_buffer *mask =
+			blur->glass ? NULL : wlr_scene_blur_get_transparency_mask_source(blur);
 
 		enum wl_output_transform mask_transform = WL_OUTPUT_TRANSFORM_NORMAL;
 
@@ -2208,6 +2365,34 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 
 		struct fx_corner_radii blur_corners = blur->corners;
 		fx_corner_radii_transform(node_transform, &blur_corners);
+
+		struct fx_render_glass_options glass_options = {
+			.data = &scene->glass_data,
+			.scale = data->scale,
+		};
+		if (blur->glass) {
+			glass_light_direction(scene->glass_data.light_angle, data->transform,
+				glass_options.light);
+			if (!wlr_box_empty(&blur->glass_lens)) {
+				glass_options.lens = (struct wlr_box){
+					.x = x + blur->glass_lens.x,
+					.y = y + blur->glass_lens.y,
+					.width = blur->glass_lens.width,
+					.height = blur->glass_lens.height,
+				};
+				transform_output_box(&glass_options.lens, data);
+				glass_options.lens_radius = blur->glass_lens_radius * data->scale;
+			}
+			if (!wlr_box_empty(&blur->glass_lens_clip)) {
+				glass_options.lens_clip = (struct wlr_box){
+					.x = x + blur->glass_lens_clip.x,
+					.y = y + blur->glass_lens_clip.y,
+					.width = blur->glass_lens_clip.width,
+					.height = blur->glass_lens_clip.height,
+				};
+				transform_output_box(&glass_options.lens_clip, data);
+			}
+		}
 
 		struct fx_render_blur_pass_options blur_options = {
 			.tex_options = {
@@ -2229,6 +2414,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.blur_data = &scene->blur_data,
 			.ignore_transparent = mask != NULL,
 			.blur_strength = blur->strength,
+			.glass = blur->glass ? &glass_options : NULL,
 		};
 		fx_render_pass_add_blur(fx_pass, &blur_options);
 		break;
@@ -2878,6 +3064,10 @@ static bool should_blur_node_extend_damage(struct wlr_scene_node *node,
 		if (blur_node->strength < 1.0f) {
 			*blur_data = blur_data_apply_strength(blur_data, blur_node->strength);
 		}
+		// Glass refracts its backdrop even when nothing is blurred
+		if (blur_node->glass) {
+			return true;
+		}
 		break;
 	case WLR_SCENE_NODE_OPTIMIZED_BLUR:;
 		struct wlr_scene_optimized_blur *optimized_node =
@@ -2897,7 +3087,12 @@ static bool apply_blur_region(struct wlr_scene_node *node, struct blur_data *blu
 		struct render_data *render_data, struct wlr_output_state *output_state,
 		const pixman_region32_t *original_damage, pixman_region32_t *blur_padding_region) {
 	bool should_compensate_blur = false;
-	const int sample_size = blur_data_calc_size(blur_data);
+	int sample_size = blur_data_calc_size(blur_data);
+	if (node->type == WLR_SCENE_NODE_BLUR && wlr_scene_blur_from_node(node)->glass) {
+		// Glass also samples as far away as its rim refracts
+		const struct glass_data *glass = &render_data->output->scene->glass_data;
+		sample_size += ceilf(glass_data_reach(glass) * render_data->scale) + 1;
+	}
 
 	pixman_region32_t node_visible_region;
 	pixman_region32_init(&node_visible_region);
@@ -3375,12 +3570,31 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 	pixman_region32_init(&background);
 	pixman_region32_copy(&background, &render_data.damage);
 
-	// Cull areas of the background that are occluded by opaque regions of
-	// scene nodes above. Those scene nodes will just render atop having us
-	// never see the background.
+	// Walk from front to back. A glass draw reads the background before
+	// opaque content above it is drawn, so that content cannot elide the
+	// clear in the sampling region. Opaque content *below* glass still can.
 	if (scene_output->scene->calculate_visibility) {
-		for (int i = list_len - 1; i >= 0; i--) {
+		for (int i = 0; i < list_len; i++) {
 			struct render_list_entry *entry = &list_data[i];
+
+			if (entry->node->type == WLR_SCENE_NODE_BLUR) {
+				if (glass_sees_scene(entry->node)) {
+					pixman_region32_t samples;
+					pixman_region32_init(&samples);
+					pixman_region32_copy(&samples, &entry->node->visible);
+					pixman_region32_translate(&samples, -scene_output->x, -scene_output->y);
+					logical_to_buffer_coords(&samples, &render_data, false);
+					pixman_region32_intersect(&samples, &samples, &render_data.damage);
+					const struct glass_data *glass = &scene_output->scene->glass_data;
+					int reach = ceilf(glass_data_reach(glass) * render_data.scale) + 1
+						+ blur_data_calc_size(&scene_output->scene->blur_data);
+					wlr_region_expand(&samples, &samples, reach);
+					pixman_region32_intersect(&samples, &samples, &render_data.damage);
+					pixman_region32_union(&background, &background, &samples);
+					pixman_region32_fini(&samples);
+				}
+				continue;
+			}
 
 			// We must only cull opaque regions that are visible by the node.
 			// The node's visibility will have the knowledge of a black rect

@@ -82,6 +82,8 @@ bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 			&pass->fx_offscreen_buffers->optimized_blur_buffer, &failed);
 	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
 			&pass->fx_offscreen_buffers->optimized_no_blur_buffer, &failed);
+	fx_framebuffer_get_or_create_custom(renderer, output->allocator, width, height, false,
+			&pass->fx_offscreen_buffers->glass_buffer, &failed);
 
 	// Bind back to the default buffer
 	fx_framebuffer_bind(pass->buffer);
@@ -973,6 +975,14 @@ static void render_blur_effects(struct fx_gles_render_pass *pass,
 	wlr_texture_destroy(options->texture);
 }
 
+// How far, in framebuffer pixels, glass samples the backdrop away from itself.
+static int glass_reach(const struct fx_render_blur_pass_options *fx_options) {
+	if (fx_options->glass == NULL) {
+		return 0;
+	}
+	return ceilf(glass_data_reach(fx_options->glass->data) * fx_options->glass->scale) + 1;
+}
+
 // Blurs the fx_options current_buffer content and returns the blurred framebuffer.
 // Returns NULL when the blur parameters reach 0.
 static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *pass,
@@ -1001,7 +1011,8 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	wlr_region_transform(&damage, &damage, fx_options->tex_options.base.transform,
 			buffer_bounds.width, buffer_bounds.height);
 
-	wlr_region_expand(&damage, &damage, blur_data_calc_size(&blur_data));
+	// Glass samples the blur away from the clip as far as its rim refracts
+	wlr_region_expand(&damage, &damage, blur_data_calc_size(&blur_data) + glass_reach(fx_options));
 	// Make sure that the region doesn't expand past the buffer bounds
 	pixman_region32_intersect_rect(&damage, &damage,
 			0, 0, buffer_bounds.width, buffer_bounds.height);
@@ -1098,6 +1109,86 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	return fx_options->current_buffer;
 }
 
+// Copies the unblurred backdrop around the clip into the glass buffer: what the
+// glass sees, before the glass itself is drawn over it.
+static struct fx_framebuffer *copy_backdrop(struct fx_gles_render_pass *pass,
+		const struct fx_render_blur_pass_options *fx_options) {
+	struct fx_offscreen_buffers *buffers = pass->fx_offscreen_buffers;
+	pixman_region32_t region;
+	pixman_region32_init(&region);
+	pixman_region32_copy(&region, fx_options->tex_options.base.clip);
+	wlr_region_expand(&region, &region, glass_reach(fx_options));
+	pixman_region32_intersect_rect(&region, &region, 0, 0,
+			pass->buffer->buffer->width, pass->buffer->buffer->height);
+	// Optimized blur shows only the bottom layers, so the rim does too
+	fx_render_pass_read_to_buffer(pass, &region, buffers->glass_buffer,
+			fx_options->use_optimized_blur ? buffers->optimized_no_blur_buffer : pass->buffer);
+	pixman_region32_fini(&region);
+	return buffers->glass_buffer;
+}
+
+static void bind_backdrop(GLenum unit, GLint uniform, struct fx_texture *texture) {
+	glActiveTexture(unit);
+	glBindTexture(texture->target, texture->tex);
+	glTexParameteri(texture->target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(texture->target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glUniform1i(uniform, unit - GL_TEXTURE0);
+}
+
+// Draws the glass slab over tex_options.clip_box: the blurred backdrop inside,
+// the sharp one refracted through the rim.
+static void render_glass(struct fx_gles_render_pass *pass,
+		const struct fx_render_blur_pass_options *fx_options,
+		struct fx_texture *blurred, struct fx_texture *sharp) {
+	const struct fx_render_texture_options *tex_options = &fx_options->tex_options;
+	const struct fx_render_glass_options *glass = fx_options->glass;
+	const struct glass_data *data = glass->data;
+	struct fx_renderer *renderer = pass->buffer->renderer;
+	struct glass_shader *shader = &renderer->shaders.glass;
+	const struct wlr_box *box = tex_options->clip_box;
+
+	push_fx_debug(renderer);
+	setup_blending(WLR_RENDER_BLEND_MODE_PREMULTIPLIED);
+	glUseProgram(shader->program);
+
+	bind_backdrop(GL_TEXTURE0, shader->tex, blurred);
+	bind_backdrop(GL_TEXTURE1, shader->sharp, sharp);
+	glUniform2f(shader->tex_size, blurred->wlr_texture.width, blurred->wlr_texture.height);
+
+	glUniform2f(shader->position, box->x, box->y);
+	glUniform2f(shader->size, box->width, box->height);
+	glUniform4f(shader->radius, tex_options->corners.top_left, tex_options->corners.top_right,
+		tex_options->corners.bottom_left, tex_options->corners.bottom_right);
+	glUniform1f(shader->bezel, data->bezel * glass->scale);
+	glUniform1f(shader->refraction, data->refraction);
+	glUniform1f(shader->dispersion, data->dispersion);
+	glUniform1f(shader->specular, data->specular);
+	glUniform2f(shader->light, glass->light[0], glass->light[1]);
+	glUniform1f(shader->dim, data->dim);
+	glUniform1f(shader->clarity, data->clarity);
+	glUniform4f(shader->tint, data->tint[0], data->tint[1], data->tint[2], data->tint[3]);
+	glUniform1f(shader->alpha, wlr_render_texture_options_get_alpha(&tex_options->base));
+	glUniform1f(shader->scale, glass->scale);
+	glUniform2f(shader->lens_position, glass->lens.x, glass->lens.y);
+	glUniform2f(shader->lens_size, glass->lens.width, glass->lens.height);
+	glUniform1f(shader->lens_radius, glass->lens_radius);
+	glUniform1f(shader->lens_bezel, data->lens_bezel * glass->scale);
+	glUniform4f(shader->lens_tint, data->lens_tint[0], data->lens_tint[1], data->lens_tint[2],
+		data->lens_tint[3]);
+	glUniform4f(shader->lens_clip, glass->lens_clip.x, glass->lens_clip.y,
+		glass->lens_clip.width, glass->lens_clip.height);
+
+	set_proj_matrix(shader->proj, pass->projection_matrix, box);
+	set_tex_matrix(shader->tex_proj, WL_OUTPUT_TRANSFORM_NORMAL, &(struct wlr_fbox){0, 0, 1, 1});
+	render(box, tex_options->base.clip, shader->pos_attrib);
+
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(sharp->target, 0);
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(blurred->target, 0);
+	pop_fx_debug(renderer);
+}
+
 void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		struct fx_render_blur_pass_options *fx_options) {
 	if (pass->fx_offscreen_buffers == NULL) {
@@ -1110,6 +1201,9 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 
 	TRACY_BOTH_ZONES_START(renderer);
 	push_fx_debug(renderer);
+
+	// The rim refracts the unblurred backdrop; copy it before anything covers it
+	struct fx_framebuffer *sharp = fx_options->glass ? copy_backdrop(pass, fx_options) : NULL;
 
 	const bool has_strength = fx_options->blur_strength < 1.0;
 	struct fx_framebuffer *buffer = pass->fx_offscreen_buffers->optimized_blur_buffer;
@@ -1128,12 +1222,25 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 		}
 		buffer = get_main_buffer_blur(pass, &blur_options);
 	}
+	if (!buffer && sharp) {
+		// Nothing blurred (no blur, or a fade at strength 0): all glass is clear
+		buffer = sharp;
+	}
 	if (!buffer) {
 		goto finish;
 	}
 	struct wlr_texture *wlr_texture =
 		fx_texture_from_buffer(&renderer->wlr_renderer, buffer->buffer);
 	struct fx_texture *blur_texture = fx_get_texture(wlr_texture);
+
+	if (sharp) {
+		struct fx_texture *sharp_texture =
+			fx_get_texture(fx_texture_from_buffer(&renderer->wlr_renderer, sharp->buffer));
+		render_glass(pass, fx_options, blur_texture, sharp_texture);
+		wlr_texture_destroy(&sharp_texture->wlr_texture);
+		wlr_texture_destroy(&blur_texture->wlr_texture);
+		goto finish;
+	}
 
 	// Get a stencil of the window ignoring transparent regions
 	if (fx_options->ignore_transparent && fx_options->tex_options.base.texture) {

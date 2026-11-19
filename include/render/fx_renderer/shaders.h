@@ -176,4 +176,35 @@ struct blur_effects_shader {
 
 bool link_blur_effects_program(struct blur_effects_shader *shader);
 
+struct glass_shader {
+	GLuint program;
+	GLint proj;
+	GLint tex_proj;
+	GLint pos_attrib;
+	GLint tex;
+	GLint sharp;
+	GLint tex_size;
+	GLint position;
+	GLint size;
+	GLint radius;
+	GLint bezel;
+	GLint refraction;
+	GLint dispersion;
+	GLint specular;
+	GLint light;
+	GLint dim;
+	GLint clarity;
+	GLint tint;
+	GLint alpha;
+	GLint scale;
+	GLint lens_position;
+	GLint lens_size;
+	GLint lens_radius;
+	GLint lens_bezel;
+	GLint lens_tint;
+	GLint lens_clip;
+};
+
+bool link_glass_program(struct glass_shader *shader);
+
 #endif

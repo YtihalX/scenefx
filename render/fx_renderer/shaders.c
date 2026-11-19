@@ -20,6 +20,7 @@
 #include "blur1_frag_src.h"
 #include "blur2_frag_src.h"
 #include "blur_effects_frag_src.h"
+#include "glass_frag_src.h"
 
 GLuint compile_shader(GLuint type, const GLchar *src) {
 	GLuint shader = glCreateShader(type);
@@ -356,6 +357,41 @@ bool link_blur_effects_program(struct blur_effects_shader *shader) {
 	shader->brightness = glGetUniformLocation(prog, "brightness");
 	shader->contrast = glGetUniformLocation(prog, "contrast");
 	shader->saturation = glGetUniformLocation(prog, "saturation");
+
+	return true;
+}
+
+bool link_glass_program(struct glass_shader *shader) {
+	GLuint prog;
+	shader->program = prog = link_program(glass_frag_src);
+	if (!shader->program) {
+		return false;
+	}
+	shader->proj = glGetUniformLocation(prog, "proj");
+	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+	shader->pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->tex = glGetUniformLocation(prog, "tex");
+	shader->sharp = glGetUniformLocation(prog, "sharp");
+	shader->tex_size = glGetUniformLocation(prog, "tex_size");
+	shader->position = glGetUniformLocation(prog, "position");
+	shader->size = glGetUniformLocation(prog, "size");
+	shader->radius = glGetUniformLocation(prog, "radius");
+	shader->bezel = glGetUniformLocation(prog, "bezel");
+	shader->refraction = glGetUniformLocation(prog, "refraction");
+	shader->dispersion = glGetUniformLocation(prog, "dispersion");
+	shader->specular = glGetUniformLocation(prog, "specular");
+	shader->light = glGetUniformLocation(prog, "light");
+	shader->dim = glGetUniformLocation(prog, "dim");
+	shader->clarity = glGetUniformLocation(prog, "clarity");
+	shader->tint = glGetUniformLocation(prog, "tint");
+	shader->alpha = glGetUniformLocation(prog, "alpha");
+	shader->scale = glGetUniformLocation(prog, "scale");
+	shader->lens_position = glGetUniformLocation(prog, "lens_position");
+	shader->lens_size = glGetUniformLocation(prog, "lens_size");
+	shader->lens_radius = glGetUniformLocation(prog, "lens_radius");
+	shader->lens_bezel = glGetUniformLocation(prog, "lens_bezel");
+	shader->lens_tint = glGetUniformLocation(prog, "lens_tint");
+	shader->lens_clip = glGetUniformLocation(prog, "lens_clip");
 
 	return true;
 }

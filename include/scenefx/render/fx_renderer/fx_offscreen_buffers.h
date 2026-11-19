@@ -24,6 +24,8 @@ struct fx_offscreen_buffers {
 	struct fx_framebuffer *effects_buffer;
 	// Swap buffer used for effects
 	struct fx_framebuffer *effects_buffer_swapped;
+	// An unblurred copy of what liquid glass refracts at its rim
+	struct fx_framebuffer *glass_buffer;
 };
 
 void fx_offscreen_buffers_destroy(struct fx_offscreen_buffers *fbos);
