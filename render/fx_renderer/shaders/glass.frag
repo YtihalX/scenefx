@@ -140,7 +140,8 @@ void main() {
 	vec2 shift_b = vec2(0.0);
 	float clear = clarity;
 	float fresnel = 0.0;
-	if (rim > 0.0 && depth < rim) {
+	bool refracts = rim > 0.0 && depth < rim;
+	if (refracts) {
 		through_rim(depth, rim, outward, shift_r, shift_g, shift_b, clear, fresnel);
 	}
 
@@ -160,13 +161,18 @@ void main() {
 		if (cut >= 0.5 && lens_depth > 0.0 && lens_depth < lens_rim) {
 			through_rim(lens_depth, lens_rim, lens_outward, shift_r, shift_g, shift_b, clear,
 				fresnel);
+			refracts = true;
 		}
 	}
 
 	vec3 color;
-	color.r = see_through(uv + shift_r, clear).r;
-	color.g = see_through(uv + shift_g, clear).g;
-	color.b = see_through(uv + shift_b, clear).b;
+	if (refracts) {
+		color.r = see_through(uv + shift_r, clear).r;
+		color.g = see_through(uv + shift_g, clear).g;
+		color.b = see_through(uv + shift_b, clear).b;
+	} else {
+		color = see_through(uv, clear);
+	}
 
 	// Darken bright backdrops so light text on the glass stays legible, then
 	// tint: the slab, and over it the lens.

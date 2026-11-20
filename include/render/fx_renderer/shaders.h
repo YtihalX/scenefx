@@ -162,16 +162,13 @@ struct blur_shader {
 bool link_blur1_program(struct blur_shader *shader);
 bool link_blur2_program(struct blur_shader *shader);
 
+// The blur's last upsample, with its brightness, contrast, saturation and noise
 struct blur_effects_shader {
-	GLuint program;
-	GLint proj;
-	GLint tex_proj;
-	GLint tex;
-	GLint pos_attrib;
-	GLfloat noise;
-	GLfloat brightness;
-	GLfloat contrast;
-	GLfloat saturation;
+	struct blur_shader blur;
+	GLint noise;
+	GLint brightness;
+	GLint contrast;
+	GLint saturation;
 };
 
 bool link_blur_effects_program(struct blur_effects_shader *shader);

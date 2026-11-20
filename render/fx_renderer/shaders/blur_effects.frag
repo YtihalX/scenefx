@@ -1,3 +1,6 @@
+// The blur's last upsample (blur2.frag), with its brightness, contrast,
+// saturation and noise applied in the same pass.
+
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
@@ -6,6 +9,9 @@ precision mediump float;
 
 varying vec2 v_texcoord;
 uniform sampler2D tex;
+
+uniform float radius;
+uniform vec2 halfpixel;
 
 uniform float brightness;
 uniform float contrast;
@@ -50,7 +56,19 @@ float noiseAmount(vec2 p) {
 }
 
 void main() {
-	vec4 color = texture2D(tex, v_texcoord);
+	vec2 uv = v_texcoord / 2.0;
+
+	vec4 sum = texture2D(tex, uv + vec2(-halfpixel.x * 2.0, 0.0) * radius);
+
+	sum += texture2D(tex, uv + vec2(-halfpixel.x, halfpixel.y) * radius) * 2.0;
+	sum += texture2D(tex, uv + vec2(0.0, halfpixel.y * 2.0) * radius);
+	sum += texture2D(tex, uv + vec2(halfpixel.x, halfpixel.y) * radius) * 2.0;
+	sum += texture2D(tex, uv + vec2(halfpixel.x * 2.0, 0.0) * radius);
+	sum += texture2D(tex, uv + vec2(halfpixel.x, -halfpixel.y) * radius) * 2.0;
+	sum += texture2D(tex, uv + vec2(0.0, -halfpixel.y * 2.0) * radius);
+	sum += texture2D(tex, uv + vec2(-halfpixel.x, -halfpixel.y) * radius) * 2.0;
+
+	vec4 color = sum / 12.0;
 	// Do *not* transpose the combined matrix when multiplying
 	color = brightnessMatrix() * contrastMatrix() * saturationMatrix() * color;
 	color.xyz += noiseAmount(v_texcoord);

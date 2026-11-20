@@ -21,8 +21,7 @@ struct fx_gles_render_pass {
 
 	// The region where there's blur
 	pixman_region32_t blur_padding_region;
-	bool has_blur;
-	// Contains output-specific framebuffers.
+	// Contains output-specific framebuffers, each made on its first use.
 	// NULL when no advanced effects like blur is being used in the current pass.
 	// Call `fx_render_pass_init_offscreen_buffers` to use advanced effects.
 	struct fx_offscreen_buffers *fx_offscreen_buffers;
@@ -109,11 +108,19 @@ struct fx_render_blur_pass_options {
 struct fx_gles_render_pass *fx_get_render_pass(struct wlr_render_pass *render_pass);
 
 /**
- * Initializes the render pass offscreen buffers required for advanced effects
- * like blur.
+ * Attaches the output's offscreen buffers, required for advanced effects like
+ * blur, to the render pass. Nothing is allocated until an effect uses a buffer.
  */
 bool fx_render_pass_init_offscreen_buffers(struct wlr_render_pass *render_pass,
 		struct wlr_output *output);
+
+/**
+ * The offscreen buffer in `buffer`, a field of the pass's fx_offscreen_buffers,
+ * made at the size of the pass's buffer if it doesn't exist or has another
+ * size. The framebuffer binding is kept. NULL when it cannot be made.
+ */
+struct fx_framebuffer *fx_render_pass_get_offscreen_buffer(struct fx_gles_render_pass *pass,
+		struct fx_framebuffer **buffer, bool has_alpha);
 
 /**
  * Render a fx texture.

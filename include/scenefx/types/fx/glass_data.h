@@ -24,7 +24,13 @@ struct glass_data {
 
 struct glass_data glass_data_get_default(void);
 
-/* How far from itself a glass pixel samples the backdrop, in logical pixels. */
-float glass_data_reach(const struct glass_data *glass);
+/*
+ * How far from itself glass `width` by `height` samples its backdrop: as far
+ * as its rim refracts and, with a lens `lens_width` by `lens_height` set into
+ * it (0 by 0 for none), the lens's rim too. Sizes, and the result, are in
+ * pixels `scale` to a logical pixel.
+ */
+float glass_data_reach(const struct glass_data *glass, float scale, float width, float height,
+		float lens_width, float lens_height);
 
 #endif

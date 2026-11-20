@@ -6,11 +6,14 @@
 
 /**
  * Used to add effect framebuffers per output instead of every output sharing
- * them.
+ * them. Each is made on its first use in a render pass (see
+ * fx_render_pass_get_offscreen_buffer), so effects that never run cost no
+ * memory.
  */
 struct fx_offscreen_buffers {
 	struct wl_list link; // fx_renderer.offscreen_buffers
 	struct wlr_addon addon;
+	struct wlr_output *output; // whose allocator makes the buffers
 
 	// Contains the blurred background for tiled windows
 	struct fx_framebuffer *optimized_blur_buffer;

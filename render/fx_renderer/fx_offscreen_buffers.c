@@ -84,6 +84,7 @@ create_new:;
 		wlr_log(WLR_ERROR, "Could not allocate a fx_offscreen_buffers");
 		return NULL;
 	}
+	fbos->output = output;
 
 	if (!fx_offscreen_buffers_assign(output, fbos)) {
 		wlr_log(WLR_ERROR, "Could not assign fx_offscreen_buffers to output: '%s'",

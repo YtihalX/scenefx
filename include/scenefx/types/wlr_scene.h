@@ -203,6 +203,9 @@ struct wlr_scene_optimized_blur {
 	int width, height;
 
 	bool dirty;
+	// The cache isn't rendered, or missed a re-render while no blur read it:
+	// a blur that starts reading it has it rendered first
+	bool stale;
 };
 
 struct wlr_scene_outputs_update_event {
@@ -648,6 +651,13 @@ void wlr_scene_blur_set_corner_radius(struct wlr_scene_blur *blur, int corner_ra
 void wlr_scene_blur_set_corner_radii(struct wlr_scene_blur *blur, struct fx_corner_radii);
 
 /**
+ * Change the position relative to its parent, the size and the corners of an
+ * existing blur node at once: one scene update instead of one per setter.
+ */
+void wlr_scene_blur_set_geometry(struct wlr_scene_blur *blur, int x, int y,
+	int width, int height, struct fx_corner_radii corners);
+
+/**
  * Make the blur node only blur the bottom layer of the scene
  */
 void wlr_scene_blur_set_should_only_blur_bottom_layer(struct wlr_scene_blur *blur,
@@ -673,7 +683,7 @@ struct wlr_scene_buffer *wlr_scene_blur_get_transparency_mask_source(
  * Lower values without also adjusting the strength will look off.
  *
  * Can be used combined with strength to create a good-looking
- * fade-out effect.
+ * fade-out effect. Only redraws the node: its visibility stays.
  */
 void wlr_scene_blur_set_alpha(struct wlr_scene_blur *blur, float alpha);
 
@@ -682,7 +692,7 @@ void wlr_scene_blur_set_alpha(struct wlr_scene_blur *blur, float alpha);
  * relative to the base 1.0 value.
  *
  * Can be used combined with alpha to create a good-looking
- * fade-out effect.
+ * fade-out effect. Only redraws the node: its visibility stays.
  */
 void wlr_scene_blur_set_strength(struct wlr_scene_blur *blur, float strength);
 

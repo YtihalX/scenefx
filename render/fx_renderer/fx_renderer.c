@@ -97,7 +97,7 @@ static inline void free_shaders(struct fx_renderer *renderer) {
 	glDeleteProgram(renderer->shaders.box_shadow.program);
 	glDeleteProgram(renderer->shaders.blur1.program);
 	glDeleteProgram(renderer->shaders.blur2.program);
-	glDeleteProgram(renderer->shaders.blur_effects.program);
+	glDeleteProgram(renderer->shaders.blur_effects.blur.program);
 	glDeleteProgram(renderer->shaders.glass.program);
 	pop_fx_debug(renderer);
 }

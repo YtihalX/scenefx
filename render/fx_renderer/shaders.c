@@ -345,14 +345,16 @@ bool link_blur2_program(struct blur_shader *shader) {
 
 bool link_blur_effects_program(struct blur_effects_shader *shader) {
 	GLuint prog;
-	shader->program = prog = link_program(blur_effects_frag_src);
-	if (!shader->program) {
+	shader->blur.program = prog = link_program(blur_effects_frag_src);
+	if (!shader->blur.program) {
 		return false;
 	}
-	shader->proj = glGetUniformLocation(prog, "proj");
-	shader->tex = glGetUniformLocation(prog, "tex");
-	shader->pos_attrib = glGetAttribLocation(prog, "pos");
-	shader->tex_proj = glGetUniformLocation(prog, "tex_proj");
+	shader->blur.proj = glGetUniformLocation(prog, "proj");
+	shader->blur.tex = glGetUniformLocation(prog, "tex");
+	shader->blur.pos_attrib = glGetAttribLocation(prog, "pos");
+	shader->blur.tex_proj = glGetUniformLocation(prog, "tex_proj");
+	shader->blur.radius = glGetUniformLocation(prog, "radius");
+	shader->blur.halfpixel = glGetUniformLocation(prog, "halfpixel");
 	shader->noise = glGetUniformLocation(prog, "noise");
 	shader->brightness = glGetUniformLocation(prog, "brightness");
 	shader->contrast = glGetUniformLocation(prog, "contrast");
