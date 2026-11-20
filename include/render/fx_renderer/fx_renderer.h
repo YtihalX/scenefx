@@ -210,6 +210,9 @@ struct fx_renderer {
 	struct wl_list textures; // fx_texture.link
 	struct wl_list offscreen_buffers; // fx_offscreen_buffers.link
 
+	// MANGO_DEBUG_GLASS: each glass draw and its blur on stderr (fx_debug_glass_region)
+	bool debug_glass;
+
 	TRACY_FN(
 		struct tracy_data *tracy_data;
 	)

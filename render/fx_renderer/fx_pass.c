@@ -19,6 +19,7 @@
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
 #include "scenefx/render/fx_renderer/fx_renderer.h"
 #include "scenefx/types/fx/blur_data.h"
+#include "render/fx_renderer/util.h"
 #include "util/matrix.h"
 
 #define MAX_QUADS 86 // 4kb
@@ -974,6 +975,9 @@ static struct fx_framebuffer *get_main_buffer_blur(struct fx_gles_render_pass *p
 	// Make sure that the region doesn't expand past the buffer bounds
 	pixman_region32_intersect_rect(&damage, &damage,
 			0, 0, buffer_bounds.width, buffer_bounds.height);
+	if (fx_options->glass && renderer->debug_glass) {
+		fx_debug_glass_region("blur", &damage);
+	}
 
 	// damage region will be scaled, make a temp
 	pixman_region32_t scaled_damage;
@@ -1184,6 +1188,9 @@ void fx_render_pass_add_blur(struct fx_gles_render_pass *pass,
 	}
 	if (!buffer) {
 		goto finish;
+	}
+	if (fx_options->glass && renderer->debug_glass && tex_options->base.clip) {
+		fx_debug_glass_region("draw", tex_options->base.clip);
 	}
 	struct wlr_texture *wlr_texture =
 		fx_texture_from_buffer(&renderer->wlr_renderer, buffer->buffer);

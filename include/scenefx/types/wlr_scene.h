@@ -125,6 +125,9 @@ struct wlr_scene {
 		bool direct_scanout;
 		bool calculate_visibility;
 		bool highlight_transparent_region;
+		// MANGO_DEBUG_GLASS: each frame's damage, and what blur adds to it, on
+		// stderr (fx_debug_glass_region)
+		bool debug_glass;
 
 		struct blur_data blur_data;
 		struct glass_data glass_data;

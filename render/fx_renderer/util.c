@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <wlr/util/log.h>
 #include <wlr/types/wlr_buffer.h>
@@ -107,4 +108,21 @@ bool open_preferred_drm_fd(struct wlr_backend *backend, int *drm_fd_ptr,
 	}
 
 	return false;
+}
+
+void fx_debug_glass_region(const char *what, const pixman_region32_t *region) {
+	int n;
+	const pixman_box32_t *boxes = pixman_region32_rectangles(region, &n);
+	long long area = 0;
+	for (int i = 0; i < n; i++) {
+		area += (long long)(boxes[i].x2 - boxes[i].x1) * (boxes[i].y2 - boxes[i].y1);
+	}
+	flockfile(stderr);
+	fprintf(stderr, "glass %s %lld ", what, area);
+	for (int i = 0; i < n; i++) {
+		fprintf(stderr, "%s%d,%d,%d,%d", i ? ";" : "",
+			boxes[i].x1, boxes[i].y1, boxes[i].x2, boxes[i].y2);
+	}
+	fputc('\n', stderr);
+	funlockfile(stderr);
 }

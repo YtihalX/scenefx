@@ -21,6 +21,7 @@
 #include "render/fx_renderer/shaders.h"
 #include "render/fx_renderer/fx_renderer.h"
 #include "render/fx_renderer/util.h"
+#include "util/env.h"
 #include "render/pass.h"
 #include "render/tracy.h"
 #include "scenefx/render/fx_renderer/fx_offscreen_buffers.h"
@@ -474,6 +475,7 @@ struct wlr_renderer *fx_renderer_create_egl(struct wlr_egl *egl) {
 	renderer->egl = egl;
 	renderer->exts_str = exts_str;
 	renderer->drm_fd = -1;
+	renderer->debug_glass = env_parse_bool("MANGO_DEBUG_GLASS");
 
 	wlr_log(WLR_INFO, "Creating scenefx FX renderer");
 	wlr_log(WLR_INFO, "Using %s", glGetString(GL_VERSION));

@@ -31,6 +31,7 @@
 #include "util/array.h"
 #include "util/env.h"
 #include "util/time.h"
+#include "render/fx_renderer/util.h"
 
 #include <wlr/config.h>
 
@@ -232,6 +233,7 @@ struct wlr_scene *wlr_scene_create(void) {
 	scene->direct_scanout = !env_parse_bool("WLR_SCENE_DISABLE_DIRECT_SCANOUT");
 	scene->calculate_visibility = !env_parse_bool("WLR_SCENE_DISABLE_VISIBILITY");
 	scene->highlight_transparent_region = env_parse_bool("WLR_SCENE_HIGHLIGHT_TRANSPARENT_REGION");
+	scene->debug_glass = env_parse_bool("MANGO_DEBUG_GLASS");
 
 	scene->blur_data = blur_data_get_default();
 	scene->glass_data = glass_data_get_default();
@@ -3674,8 +3676,18 @@ bool wlr_scene_output_build_state(struct wlr_scene_output *scene_output,
 			}
 		}
 
+		if (scene_output->scene->debug_glass && should_compensate_blur) {
+			pixman_region32_t added;
+			pixman_region32_init(&added);
+			pixman_region32_subtract(&added, &render_data.damage, &original_damage);
+			fx_debug_glass_region("added", &added);
+			pixman_region32_fini(&added);
+		}
 		pixman_region32_fini(&blur_padding_region);
 		pixman_region32_fini(&original_damage);
+	}
+	if (scene_output->scene->debug_glass) {
+		fx_debug_glass_region("frame", &render_data.damage);
 	}
 
 	pixman_region32_t background;
