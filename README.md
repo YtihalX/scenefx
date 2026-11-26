@@ -46,6 +46,14 @@ This issue might be caused by compiling scenefx and wlroots with
 Clang compiler and thin LTO(`-flto=thin`) option enabled. Try to
 compile the libraries without LTO optimizations or with GCC compiler instead.
 
+### Soft window contents at fractional scale
+
+When a full client buffer matches the output's fractional scale, SceneFX
+samples it one texel per output pixel. If rounding leaves the destination a
+pixel narrower or wider, it crops or repeats the edge texels instead of
+resampling the whole window. Cropped and genuinely scaled buffers still use
+normal filtering.
+
 ## Debugging
 
 SceneFX includes the same debugging tools and environment variables as upstream wlroots does, but with some extra goodies.

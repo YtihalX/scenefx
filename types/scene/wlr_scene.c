@@ -472,6 +472,47 @@ static void scale_box(struct wlr_box *box, float scale) {
 	box->y = round(box->y * scale);
 }
 
+// scale_box rounds a node's edges to pixels, while a fractional-scale-v1
+// client rounds its scaled size alone, so a buffer drawn for this scale can be
+// a pixel wider or taller than its destination, or a pixel short of it.
+// Stretching it by that pixel resamples, and so blurs, the whole buffer. Map
+// its pixels 1:1 instead: that crops its last column or row, or repeats it
+// through the texture's edge clamp.
+static void snap_fractional_buffer(struct wlr_render_texture_options *options,
+		const struct wlr_scene_buffer *buffer, float scale) {
+	int buffer_width = options->texture->width;
+	int buffer_height = options->texture->height;
+	bool transposed = options->transform & WL_OUTPUT_TRANSFORM_90;
+	int width = transposed ? options->dst_box.height : options->dst_box.width;
+	int height = transposed ? options->dst_box.width : options->dst_box.height;
+	if ((buffer_width == width && buffer_height == height) ||
+			abs(buffer_width - width) > 1 || abs(buffer_height - height) > 1 ||
+			buffer->dst_width <= 0 || buffer->dst_height <= 0) {
+		return;
+	}
+
+	// Only whole textures can use the edge clamp without sampling outside a crop.
+	const struct wlr_fbox *src = &options->src_box;
+	if (!wlr_fbox_empty(src) && (src->x != 0 || src->y != 0 ||
+			src->width != buffer_width || src->height != buffer_height)) {
+		return;
+	}
+
+	// Match the buffer size for the preferred scale sent by fractional-scale-v1.
+	int scale120 = round((double)scale * 120);
+	if (scale120 % 120 == 0) {
+		return;
+	}
+	int logical_width = buffer->dst_width, logical_height = buffer->dst_height;
+	wlr_output_transform_coords(buffer->transform, &logical_width, &logical_height);
+	if (((int64_t)logical_width * scale120 + 60) / 120 != buffer_width ||
+			((int64_t)logical_height * scale120 + 60) / 120 != buffer_height) {
+		return;
+	}
+
+	options->src_box = (struct wlr_fbox){ .width = width, .height = height };
+}
+
 static void transform_output_box(struct wlr_box *box, const struct render_data *data) {
 	enum wl_output_transform transform = wlr_output_transform_invert(data->transform);
 	scale_box(box, data->scale);
@@ -2338,6 +2379,7 @@ static void scene_entry_render(struct render_list_entry *entry, const struct ren
 			.corners = fx_corner_radii_scale(buffer_corners, data->scale),
 			.clipped_region = {0},
 		};
+		snap_fractional_buffer(&tex_options.base, scene_buffer, data->scale);
 
 		// TODO: Use the base wlr_render_pass_add_texture as a fast-path in the future
 		fx_render_pass_add_texture(fx_pass, &tex_options);
