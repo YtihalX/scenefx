@@ -48,11 +48,12 @@ compile the libraries without LTO optimizations or with GCC compiler instead.
 
 ### Soft window contents at fractional scale
 
-When a full client buffer matches the output's fractional scale, SceneFX
-samples it one texel per output pixel. If rounding leaves the destination a
-pixel narrower or wider, it crops or repeats the edge texels instead of
-resampling the whole window. Cropped and genuinely scaled buffers still use
-normal filtering.
+When a client buffer has one texel per output pixel at a fractional scale,
+SceneFX samples it 1:1 from a whole texel. That includes crops, such as a
+window clipped inside its client-side shadows. If rounding leaves the
+destination a pixel narrower or wider, SceneFX drops or adds one edge column
+or row instead of resampling the whole window. Genuinely scaled buffers still
+use normal filtering.
 
 ## Debugging
 

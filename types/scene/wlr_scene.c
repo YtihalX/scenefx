@@ -472,45 +472,54 @@ static void scale_box(struct wlr_box *box, float scale) {
 	box->y = round(box->y * scale);
 }
 
-// scale_box rounds a node's edges to pixels, while a fractional-scale-v1
-// client rounds its scaled size alone, so a buffer drawn for this scale can be
-// a pixel wider or taller than its destination, or a pixel short of it.
-// Stretching it by that pixel resamples, and so blurs, the whole buffer. Map
-// its pixels 1:1 instead: that crops its last column or row, or repeats it
-// through the texture's edge clamp.
+// A client drawing for a fractional scale sizes its buffer to the scaled
+// surface, but scale_box rounds each node edge to a pixel, and a crop, such as
+// a window clipped to its geometry inside client-side shadows, can start
+// partway into a texel. Sampling at that ratio or offset resamples, and so
+// blurs, the whole buffer. When the buffer has one texel per output pixel, map
+// texels 1:1 from the nearest whole texel instead. That drops or adds at most
+// one column or row at the crop's edge; past the buffer's edge, the texture's
+// edge clamp repeats the last one.
+static double snap_texel(double start, double size, int texels) {
+	// Stay within the crop's texels when there are enough of them.
+	double first = floor(start), last = ceil(start + size) - texels;
+	return fmax(first, fmin(round(start), last));
+}
+
 static void snap_fractional_buffer(struct wlr_render_texture_options *options,
 		const struct wlr_scene_buffer *buffer, float scale) {
-	int buffer_width = options->texture->width;
-	int buffer_height = options->texture->height;
+	int scale120 = round((double)scale * 120);
+	if (scale120 % 120 == 0 || buffer->dst_width <= 0 || buffer->dst_height <= 0) {
+		return;
+	}
+
+	struct wlr_fbox src = options->src_box;
+	if (wlr_fbox_empty(&src)) {
+		src = (struct wlr_fbox){
+			.width = options->texture->width,
+			.height = options->texture->height,
+		};
+	}
 	bool transposed = options->transform & WL_OUTPUT_TRANSFORM_90;
 	int width = transposed ? options->dst_box.height : options->dst_box.width;
 	int height = transposed ? options->dst_box.width : options->dst_box.height;
-	if ((buffer_width == width && buffer_height == height) ||
-			abs(buffer_width - width) > 1 || abs(buffer_height - height) > 1 ||
-			buffer->dst_width <= 0 || buffer->dst_height <= 0) {
-		return;
-	}
 
-	// Only whole textures can use the edge clamp without sampling outside a crop.
-	const struct wlr_fbox *src = &options->src_box;
-	if (!wlr_fbox_empty(src) && (src->x != 0 || src->y != 0 ||
-			src->width != buffer_width || src->height != buffer_height)) {
-		return;
-	}
-
-	// Match the buffer size for the preferred scale sent by fractional-scale-v1.
-	int scale120 = round((double)scale * 120);
-	if (scale120 % 120 == 0) {
-		return;
-	}
+	// One texel per pixel: the source spans its logical size at the scale
+	// fractional-scale-v1 sends, give or take the destination's rounding.
 	int logical_width = buffer->dst_width, logical_height = buffer->dst_height;
 	wlr_output_transform_coords(buffer->transform, &logical_width, &logical_height);
-	if (((int64_t)logical_width * scale120 + 60) / 120 != buffer_width ||
-			((int64_t)logical_height * scale120 + 60) / 120 != buffer_height) {
+	if (fabs(src.width - width) > 1 || fabs(src.height - height) > 1 ||
+			fabs(src.width - logical_width * scale120 / 120.0) > 1 ||
+			fabs(src.height - logical_height * scale120 / 120.0) > 1) {
 		return;
 	}
 
-	options->src_box = (struct wlr_fbox){ .width = width, .height = height };
+	options->src_box = (struct wlr_fbox){
+		.x = snap_texel(src.x, src.width, width),
+		.y = snap_texel(src.y, src.height, height),
+		.width = width,
+		.height = height,
+	};
 }
 
 static void transform_output_box(struct wlr_box *box, const struct render_data *data) {
